@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+_out.txt
+.streamlit/
 
 # Python gerado pelo transpilador a partir dos exemplos
 exemplos/*.py

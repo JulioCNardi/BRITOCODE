@@ -1,7 +1,4 @@
-"""memepy: transpilador da linguagem memética (Felipe ... Smith) para Python.
-
-Fases:  texto --lexer--> tokens --parser--> árvore --semântico--> árvore anotada --gerador--> Python
-"""
+"""BRITOCODE: transpilador da linguagem memética para Python."""
 
 from .erros import Aviso, ErroLexico, ErroMeme, ErroSemantico, ErroSintatico
 from .gerador import Gerador
@@ -13,10 +10,7 @@ __version__ = "1.0.0"
 
 
 def transpilar(fonte, nome_arquivo=None):
-    """Recebe o código memético e devolve (codigo_python, lista_de_avisos).
-
-    Levanta ErroLexico, ErroSintatico ou ErroSemantico se o programa tiver erro.
-    """
+    """Código BRITOCODE (.brito) -> (python, avisos). Levanta ErroMeme se houver erro."""
     fonte = preparar_fonte(fonte)
     tokens = Lexer(fonte).tokens()
     programa = Parser(tokens).programa()

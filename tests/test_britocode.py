@@ -6,7 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from memepy import ErroLexico, ErroSemantico, ErroSintatico, transpilar
+from britocode import ErroLexico, ErroSemantico, ErroSintatico, transpilar
 
 EXEMPLOS = Path(__file__).resolve().parent.parent / "exemplos"
 
@@ -352,10 +352,28 @@ class TestErros(unittest.TestCase):
         fonte = "Felipe\nRed_bull x = y;\nSmith"
         with self.assertRaises(ErroSemantico) as ctx:
             transpilar(fonte)
-        texto = ctx.exception.formatar(fonte, "teste.meme")
-        self.assertIn("teste.meme:2:14", texto)
+        texto = ctx.exception.formatar(fonte, "teste.brito")
+        self.assertIn("teste.brito:2:14", texto)
         self.assertIn("Red_bull x = y;", texto)
         self.assertTrue(texto.endswith("|              ^"))
+
+
+class TestArrays(unittest.TestCase):
+    def test_init_e_indice(self):
+        self.assertEqual(
+            rodar("Red_bull xs[3] = {1, 2, 3}; vo_fica_pelado_aqui(xs[0], xs[2]);"),
+            "1 3\n",
+        )
+
+    def test_atribuicao_e_incremento(self):
+        self.assertEqual(
+            rodar("Red_bull v[4]; v[1] = 5; v[1]++; vo_fica_pelado_aqui(v[1]);"),
+            "6\n",
+        )
+
+    def test_array_sem_indice_erro(self):
+        with self.assertRaises(ErroSemantico):
+            gerar("Red_bull xs[2]; vo_fica_pelado_aqui(xs);")
 
 
 class TestExemplos(unittest.TestCase):
@@ -368,7 +386,7 @@ class TestExemplos(unittest.TestCase):
     }
 
     def test_todos_os_exemplos_transpilam(self):
-        arquivos = sorted(EXEMPLOS.glob("*.meme"))
+        arquivos = sorted(EXEMPLOS.glob("*.brito"))
         self.assertTrue(arquivos)
         for arquivo in arquivos:
             with self.subTest(arquivo=arquivo.name):
@@ -378,7 +396,7 @@ class TestExemplos(unittest.TestCase):
     def test_saida_dos_exemplos(self):
         for nome, (entrada, esperado) in self.CASOS.items():
             with self.subTest(exemplo=nome):
-                fonte = (EXEMPLOS / f"{nome}.meme").read_text(encoding="utf-8")
+                fonte = (EXEMPLOS / f"{nome}.brito").read_text(encoding="utf-8")
                 self.assertEqual(rodar(fonte, entrada, envolver=False), esperado)
 
 

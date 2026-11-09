@@ -1,8 +1,4 @@
-"""Nós da árvore sintática (AST).
-
-Os campos declarados aqui vêm do parser. A análise semântica pendura
-informações extras nos nós como atributos comuns (simbolo, tipo_expr, ...).
-"""
+"""Nós da AST. Campos vêm do parser; o semântico anota simbolo, tipo_expr, etc."""
 
 from dataclasses import dataclass, fields
 
@@ -17,15 +13,13 @@ def no(cls):
     return dataclass(eq=False)(cls)
 
 
-# ---------------------------------------------------------------- estrutura
-
 @no
 class TipoC(No):
     partes: list  # ex.: ["UNSIGNED", "INT"]
 
     @property
     def categoria(self):
-        """Como o tipo se comporta: 'int', 'float' ou 'char'."""
+        """'int', 'float' ou 'char'."""
         if "FLOAT" in self.partes or "DOUBLE" in self.partes:
             return "float"
         if "CHAR" in self.partes:
@@ -40,7 +34,7 @@ class Programa(No):
 
 @no
 class Funcao(No):
-    retorno: object  # TipoC ou None (função sem retorno)
+    retorno: object  # TipoC ou None
     nome: str
     params: list
     corpo: object
@@ -51,8 +45,6 @@ class Parametro(No):
     tipo: TipoC
     nome: str
 
-
-# ---------------------------------------------------------------- comandos
 
 @no
 class Bloco(No):
@@ -68,7 +60,9 @@ class Declaracao(No):
 @no
 class Declarador(No):
     nome: str
-    valor: object  # expressão ou None
+    valor: object  # expressão escalar ou None
+    tamanho: object = None  # expr do tamanho se for array
+    init: object = None  # lista de exprs ou None
 
 
 @no
@@ -76,12 +70,14 @@ class Atribuicao(No):
     alvo: str
     op: str  # =, +=, -=, *=, /=, %=
     valor: object
+    indice: object = None  # se set, xs[i] = ...
 
 
 @no
 class Incremento(No):
     alvo: str
     op: str  # ++ ou --
+    indice: object = None
 
 
 @no
@@ -141,8 +137,6 @@ class Vazio(No):
     pass
 
 
-# ---------------------------------------------------------------- expressões
-
 @no
 class Numero(No):
     valor: object
@@ -162,6 +156,12 @@ class Texto(No):
 @no
 class Variavel(No):
     nome: str
+
+
+@no
+class Indexacao(No):
+    nome: str
+    indice: object
 
 
 @no
@@ -194,10 +194,8 @@ class Conversao(No):
     valor: object
 
 
-# ---------------------------------------------------------------- utilidades
-
 def percorrer(valor):
-    """Visita o nó e todos os seus descendentes."""
+    """Percorre o nó e seus filhos."""
     if isinstance(valor, list):
         for item in valor:
             yield from percorrer(item)
@@ -208,7 +206,7 @@ def percorrer(valor):
 
 
 def despejar(valor, nivel=0):
-    """Desenha a árvore em texto, para a opção --arvore."""
+    """Árvore em texto (--arvore)."""
     pad = "  " * nivel
     if isinstance(valor, TipoC):
         return f"{pad}Tipo {' '.join(valor.partes)}"

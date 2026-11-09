@@ -1,4 +1,4 @@
-"""Erros e avisos do transpilador, sempre com a posição no código-fonte."""
+"""Erros e avisos com posição no código."""
 
 
 class ErroMeme(Exception):
@@ -11,7 +11,7 @@ class ErroMeme(Exception):
         self.coluna = coluna
 
     def formatar(self, fonte=None, arquivo="<fonte>"):
-        """Monta a mensagem com o trecho do código e uma setinha no lugar do problema."""
+        """Mensagem com trecho do código e setinha na posição."""
         local = arquivo
         if self.linha is not None:
             local += f":{self.linha}:{self.coluna}"
@@ -40,6 +40,6 @@ class ErroSemantico(ErroMeme):
 
 
 class Aviso(ErroMeme):
-    """Não interrompe a transpilação; só avisa de algo suspeito."""
+    """Aviso que não interrompe a transpilação."""
 
     etapa = "Aviso"

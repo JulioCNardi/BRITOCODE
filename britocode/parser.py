@@ -1,6 +1,6 @@
-"""Análise sintática: parser descendente recursivo que monta a árvore (AST).
+"""Parser descendente recursivo (AST).
 
-Gramática (resumida):
+Gramática:
 
     programa    := Felipe item* Smith
     item        := funcao | comando
@@ -12,11 +12,12 @@ Gramática (resumida):
                  | vo_fica_pelado_aqui '(' [args] ')' ';'
                  | Eu_Tenho_Quantos_Anos_Gente? '(' [TEXTO] [ID {',' ID}] ')' ';'
                  | Tô_No_SAMU ID '(' [args] ')' ';'
-                 | ID ('=' | '+=' | ...) expr ';' | ID ('++' | '--') ';' | ';'
+                 | ID ['[' expr ']'] ('=' | '+=' | ...) expr ';' | ID ['[' expr ']'] ('++'|'--') ';' | ';'
     se          := MinhaArte '(' expr ')' corpo
                    { Faz_Isso_Comigo_Não_Velho '(' expr ')' corpo } [Romero_Britto corpo]
     enquanto    := Quebro_VéiVai_Me_Dar_Injeção '(' expr ')' corpo
     para        := VocêÉDeLá '(' [decl | atrib] ';' [expr] ';' [passo] ')' corpo
+    declaracao  := tipo ID ['[' expr ']' ['=' '{' [expr {',' expr}] '}']] ['=' expr] {',' ...}
 
     expr        := ou
     ou          := e { '||' e }
@@ -26,14 +27,15 @@ Gramática (resumida):
     soma        := produto { ('+' | '-') produto }
     produto     := unaria { ('*' | '/' | '%') unaria }
     unaria      := ('!' | '-' | '+') unaria | '(' tipo ')' unaria | primaria
-    primaria    := número | caractere | texto | ID | '(' expr ')'
+    primaria    := número | caractere | texto | ID ['[' expr ']'] | '(' expr ')'
                  | Tô_No_SAMU ID '(' [args] ')' | Eu_Tenho_Quantos_Anos_Gente? '(' [TEXTO] ')'
 """
 
 from .arvore import (
     Atribuicao, Binaria, Bloco, Caractere, Chamada, ComandoChamada, Continua, Conversao,
-    Declaracao, Declarador, Enquanto, Funcao, Imprima, Incremento, Leia, LeiaExpr, Numero,
-    Para, Parametro, Pare, Programa, Retorne, Se, Texto, TipoC, Unaria, Variavel, Vazio,
+    Declaracao, Declarador, Enquanto, Funcao, Imprima, Incremento, Indexacao,
+    Leia, LeiaExpr, Numero, Para, Parametro, Pare, Programa, Retorne, Se, Texto, TipoC, Unaria,
+    Variavel, Vazio,
 )
 from .erros import ErroSintatico
 from .lexer import NOME_DO_TOKEN
@@ -48,7 +50,7 @@ DESCRICOES = {
     "EOF": "o fim do arquivo",
 }
 
-# Quem vem de C tende a escrever as palavras originais; damos a dica certa.
+# dicas quando alguém escreve palavra de C
 COLA_DE_C = {
     "int": "Red_bull", "float": "Jarbas", "char": "Porra", "double": "Katrina",
     "unsigned": "Guarapari", "short": "Búzios", "long": "Caralho",
@@ -80,8 +82,6 @@ class Parser:
         self.tokens = tokens
         self.i = 0
 
-    # ------------------------------------------------------------ utilidades
-
     @property
     def atual(self):
         return self.tokens[self.i]
@@ -111,7 +111,7 @@ class Parser:
     def _fim_comando(self):
         if self._eh(";"):
             return self._consumir()
-        # Aponta logo depois do último token, que é onde o ';' faltou.
+        # aponta onde o ';' deveria estar
         anterior = self.tokens[self.i - 1]
         raise ErroSintatico(
             f"faltou ';' no fim do comando (encontrei {descrever_token(self.atual)})",
@@ -122,8 +122,6 @@ class Parser:
     @staticmethod
     def _pos(tok):
         return {"linha": tok.linha, "coluna": tok.coluna}
-
-    # ------------------------------------------------------------ programa
 
     def programa(self):
         if not self._eh("INICIO"):
@@ -171,7 +169,7 @@ class Parser:
             raise self._erro(f"o tipo '{escrito}' não existe (seria '{em_c}' em C)", primeiro)
 
     def funcao(self):
-        inicio = self._consumir()  # Samu
+        inicio = self._consumir()
         retorno = self.tipo() if self._eh("TIPO") else None
         nome = self._esperar("ID", "o nome da função depois de Samu")
         self._esperar("(", f"'(' depois do nome da função '{nome.valor}'")
@@ -194,8 +192,6 @@ class Parser:
         corpo = self.bloco()
         return Funcao(retorno, nome.valor, params, corpo, **self._pos(inicio))
 
-    # ------------------------------------------------------------ comandos
-
     def bloco(self):
         abre = self._esperar("{")
         comandos = []
@@ -210,7 +206,7 @@ class Parser:
         return Bloco(comandos, **self._pos(abre))
 
     def _corpo(self):
-        """Corpo de if/while/for: um bloco { } ou um único comando."""
+        """Bloco { } ou comando único."""
         cmd = self.comando()
         if isinstance(cmd, Bloco):
             return cmd
@@ -283,8 +279,23 @@ class Parser:
                 raise self._erro(
                     f"pra declarar a função '{nome.valor}' use Samu, ex.: Samu Red_bull {nome.valor}(...) {{ }}", nome
                 )
-            valor = self.expressao() if self._aceitar("=") else None
-            itens.append(Declarador(nome.valor, valor, **self._pos(nome)))
+            tamanho = None
+            init = None
+            valor = None
+            if self._aceitar("["):
+                tamanho = self.expressao()
+                self._esperar("]", "']' depois do tamanho do vetor")
+                if self._aceitar("="):
+                    self._esperar("{", "'{' na inicialização do vetor")
+                    init = []
+                    if not self._eh("}"):
+                        init.append(self.expressao())
+                        while self._aceitar(","):
+                            init.append(self.expressao())
+                    self._esperar("}", "'}' para fechar a inicialização do vetor")
+            elif self._aceitar("="):
+                valor = self.expressao()
+            itens.append(Declarador(nome.valor, valor, tamanho=tamanho, init=init, **self._pos(nome)))
             if not self._aceitar(","):
                 break
         return Declaracao(tipo, itens, linha=tipo.linha, coluna=tipo.coluna)
@@ -292,13 +303,17 @@ class Parser:
     def atribuicao(self):
         nome = self._consumir()
         pos = self._pos(nome)
+        indice = None
+        if self._aceitar("["):
+            indice = self.expressao()
+            self._esperar("]", "']' depois do índice")
         t = self.atual.tipo
         if t in OPS_ATRIBUICAO:
             self._consumir()
-            return Atribuicao(nome.valor, t, self.expressao(), **pos)
+            return Atribuicao(nome.valor, t, self.expressao(), indice=indice, **pos)
         if t in ("++", "--"):
             self._consumir()
-            return Incremento(nome.valor, t, **pos)
+            return Incremento(nome.valor, t, indice=indice, **pos)
         if nome.valor in COLA_DE_C:
             raise self._erro(f"aqui não é C! Em vez de '{nome.valor}' use '{COLA_DE_C[nome.valor]}'", nome)
         if t == "(":
@@ -326,7 +341,7 @@ class Parser:
         return cond
 
     def se(self):
-        inicio = self._consumir()  # MinhaArte ou Faz_Isso_Comigo_Não_Velho
+        inicio = self._consumir()
         cond = self._condicao()
         entao = self._corpo()
         senao = None
@@ -408,12 +423,10 @@ class Parser:
         return Leia(prompt, alvos, **self._pos(inicio))
 
     def chamada(self):
-        inicio = self._consumir()  # Tô_No_SAMU
+        inicio = self._consumir()
         nome = self._esperar("ID", "o nome da função depois de Tô_No_SAMU")
         self._esperar("(", f"'(' depois de '{nome.valor}'")
         return Chamada(nome.valor, self._argumentos(), **self._pos(inicio))
-
-    # ------------------------------------------------------------ expressões
 
     def expressao(self):
         return self._ou()
@@ -482,6 +495,10 @@ class Parser:
             return LeiaExpr(prompt, **pos)
         if t == "ID":
             self._consumir()
+            if self._aceitar("["):
+                indice = self.expressao()
+                self._esperar("]", "']' depois do índice")
+                return Indexacao(tok.valor, indice, **pos)
             if self._eh("("):
                 if tok.valor in COLA_DE_C:
                     raise self._erro(f"aqui não é C! Em vez de '{tok.valor}' use '{COLA_DE_C[tok.valor]}'", tok)
@@ -491,7 +508,7 @@ class Parser:
             return Variavel(tok.valor, **pos)
         if t == "(":
             self._consumir()
-            if self._eh("TIPO"):  # conversão: (Red_bull) x
+            if self._eh("TIPO"):  # (Red_bull) x
                 tipo = self.tipo()
                 self._esperar(")", "')' depois do tipo da conversão")
                 return Conversao(tipo, self._unaria(), **pos)

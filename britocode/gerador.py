@@ -1,8 +1,8 @@
-"""Geração de código: percorre a árvore já analisada e escreve o Python."""
+"""Geração de código Python a partir da AST anotada."""
 
-from .arvore import Funcao, Numero, Se, Unaria
+from .arvore import Funcao, Indexacao, Numero, Se, Unaria
 
-# Precedência dos operadores no Python (maior = gruda mais forte).
+# precedência (maior = mais apertado)
 OU, E, NAO, CMP, SOMA, MULT, UNARIO, ATOMO = range(1, 9)
 
 OPERADORES = {
@@ -19,7 +19,7 @@ VALOR_PADRAO = {"int": "0", "float": "0.0", "char": '""'}
 
 
 def texto_py(s):
-    """Literal de texto em Python, preferindo aspas duplas."""
+    """Literal Python com aspas duplas quando possível."""
     r = repr(s)
     if r[0] == "'" and '"' not in s:
         r = '"' + r[1:-1] + '"'
@@ -30,16 +30,13 @@ class Gerador:
     def __init__(self):
         self.linhas = []
         self.nivel = 0
-        # Pilha de laços abertos. Para VocêÉDeLá que virou while, guarda o passo
-        # (i++), que precisa rodar antes de cada MeuBraço (continue).
         self.lacos = []
 
     def gerar(self, programa, nome_arquivo=None):
         origem = f" a partir de {nome_arquivo}" if nome_arquivo else ""
-        self._emitir(f"# Gerado pelo memepy{origem}. Edite o código memético, não este arquivo.")
+        self._emitir(f"# Gerado pelo BRITOCODE{origem}. Edite o .brito, não este arquivo.")
         funcoes = [i for i in programa.itens if isinstance(i, Funcao)]
         comandos = [i for i in programa.itens if not isinstance(i, Funcao)]
-        # As funções vão para o topo: assim dá pra chamar uma função declarada mais abaixo.
         for f in funcoes:
             self._emitir("")
             self._emitir("")
@@ -51,8 +48,6 @@ class Gerador:
             self._comandos(comandos)
         return "\n".join(self.linhas) + "\n"
 
-    # ------------------------------------------------------------ utilidades
-
     def _emitir(self, texto):
         self.linhas.append("    " * self.nivel + texto if texto else "")
 
@@ -61,7 +56,7 @@ class Gerador:
             getattr(self, "_cmd_" + type(cmd).__name__)(cmd)
 
     def _corpo(self, comandos, depois=None):
-        """Escreve um bloco indentado; Python não aceita bloco vazio, então usa pass."""
+        """Bloco indentado; usa pass se vazio."""
         self.nivel += 1
         antes = len(self.linhas)
         self._comandos(comandos)
@@ -70,8 +65,6 @@ class Gerador:
         if len(self.linhas) == antes:
             self._emitir("pass")
         self.nivel -= 1
-
-    # ------------------------------------------------------------ funções
 
     def _funcao(self, f):
         params = ", ".join(f"{p.simbolo.nome_py}: {TIPO_PY[p.tipo.categoria]}" for p in f.params)
@@ -86,10 +79,13 @@ class Gerador:
             self._emitir("pass")
         self.nivel -= 1
 
-    # ------------------------------------------------------------ comandos
+    def _alvo(self, sym, indice=None):
+        if indice is None:
+            return sym.nome_py
+        idx, _ = self._expr(indice)
+        return f"{sym.nome_py}[{idx}]"
 
     def _cmd_Bloco(self, bloco):
-        # Python não tem escopo de bloco; os nomes já foram ajustados na análise semântica.
         self._comandos(bloco.comandos)
 
     def _cmd_Vazio(self, cmd):
@@ -97,31 +93,45 @@ class Gerador:
 
     def _cmd_Declaracao(self, cmd):
         categoria = cmd.tipo.categoria
+        tip = TIPO_PY[categoria]
         for d in cmd.itens:
-            valor = VALOR_PADRAO[categoria] if d.valor is None else self._valor_para(d.valor, categoria)
-            self._emitir(f"{d.simbolo.nome_py}: {TIPO_PY[categoria]} = {valor}")
+            nome = d.simbolo.nome_py
+            if d.simbolo.eh_array:
+                n = d.simbolo.tamanho
+                if d.init:
+                    partes = [self._valor_para(e, categoria) for e in d.init]
+                    while len(partes) < n:
+                        partes.append(VALOR_PADRAO[categoria])
+                    self._emitir(f"{nome}: list[{tip}] = [{', '.join(partes)}]")
+                else:
+                    self._emitir(f"{nome}: list[{tip}] = [{VALOR_PADRAO[categoria]}] * {n}")
+            else:
+                valor = VALOR_PADRAO[categoria] if d.valor is None else self._valor_para(d.valor, categoria)
+                self._emitir(f"{nome}: {tip} = {valor}")
 
     def _cmd_Atribuicao(self, cmd):
+        alvo = self._alvo(cmd.simbolo, getattr(cmd, "indice", None))
         if cmd.op == "=":
             valor = self._valor_para(cmd.valor, cmd.simbolo.categoria)
-            self._emitir(f"{cmd.simbolo.nome_py} = {valor}")
+            self._emitir(f"{alvo} = {valor}")
         else:
-            self._atualizar(cmd.simbolo, cmd.conta)
+            self._atualizar(cmd.simbolo, cmd.conta, getattr(cmd, "indice", None))
 
     def _cmd_Incremento(self, cmd):
-        self._atualizar(cmd.simbolo, cmd.conta)
+        self._atualizar(cmd.simbolo, cmd.conta, getattr(cmd, "indice", None))
 
-    def _atualizar(self, sym, conta):
-        """x += 1, x /= 2 ... Usa a forma curta quando o tipo não muda."""
+    def _atualizar(self, sym, conta, indice=None):
+        """Forma curta (x += ...) quando o tipo não muda."""
         destino = sym.categoria
+        alvo = self._alvo(sym, indice)
         if self._sem_conversao(conta.tipo_expr, destino):
             op = "//" if conta.div_inteira else OPERADORES[conta.op][0]
             direita, _ = self._expr(conta.dir)
             if conta.ord_dir:
                 direita = f"ord({direita})"
-            self._emitir(f"{sym.nome_py} {op}= {direita}")
+            self._emitir(f"{alvo} {op}= {direita}")
         else:
-            self._emitir(f"{sym.nome_py} = {self._valor_para(conta, destino)}")
+            self._emitir(f"{alvo} = {self._valor_para(conta, destino)}")
 
     def _cmd_Se(self, cmd):
         self._emitir(f"if {self._cond(cmd.condicao)}:")
@@ -159,7 +169,6 @@ class Gerador:
             self._corpo(cmd.corpo.comandos)
             self.lacos.pop()
             return
-        # Tradução geral: inicialização; while condição: corpo; passo
         if cmd.inicio is not None:
             self._comandos([cmd.inicio])
         cond = self._cond(cmd.condicao) if cmd.condicao is not None else "True"
@@ -196,7 +205,7 @@ class Gerador:
         for arg in cmd.args:
             codigo, _ = self._expr(arg)
             if arg.tipo_expr == "bool":
-                codigo = f"int({codigo})"  # em C, condição vale 1 ou 0
+                codigo = f"int({codigo})"
             partes.append(codigo)
         self._emitir(f"print({', '.join(partes)})")
 
@@ -215,8 +224,6 @@ class Gerador:
     def _cmd_ComandoChamada(self, cmd):
         self._emitir(self._expr(cmd.chamada)[0])
 
-    # ------------------------------------------------------------ conversões
-
     @staticmethod
     def _sem_conversao(origem, destino):
         return origem == destino or (destino == "char" and origem in ("str", "entrada"))
@@ -225,7 +232,7 @@ class Gerador:
         return self._converter(e, destino)[0]
 
     def _converter(self, e, destino):
-        """Gera a expressão já convertida para o tipo de quem vai recebê-la."""
+        """Expressão convertida para o tipo de destino."""
         origem = e.tipo_expr
         if destino == "float" and origem == "int":
             if isinstance(e, Numero):
@@ -243,13 +250,11 @@ class Gerador:
             return (f"chr(int({codigo}))" if origem == "float" else f"chr({codigo})"), ATOMO
         return codigo, prec
 
-    # ------------------------------------------------------------ expressões
-
     def _cond(self, e):
         return self._expr(e, condicao=True)[0]
 
     def _expr(self, e, condicao=False):
-        """Devolve (código, precedência) para decidir onde precisa de parênteses."""
+        """(código, precedência) — para decidir parênteses."""
         return getattr(self, "_e_" + type(e).__name__)(e, condicao)
 
     def _e_Numero(self, e, condicao):
@@ -263,6 +268,10 @@ class Gerador:
 
     def _e_Variavel(self, e, condicao):
         return e.simbolo.nome_py, ATOMO
+
+    def _e_Indexacao(self, e, condicao):
+        idx, _ = self._expr(e.indice)
+        return f"{e.simbolo.nome_py}[{idx}]", ATOMO
 
     def _e_LeiaExpr(self, e, condicao):
         prompt = texto_py(e.prompt) if e.prompt is not None else ""
@@ -292,8 +301,6 @@ class Gerador:
     def _e_Binaria(self, e, condicao):
         op, prec = OPERADORES[e.op]
         logico = e.op in ("&&", "||")
-        # Dentro de if/while basta o valor "verdadeiro/falso"; fora, && e || de C
-        # sempre dão 1 ou 0, então os lados viram bool.
         esq, pe = self._expr(e.esq, condicao and logico)
         dir_, pd = self._expr(e.dir, condicao and logico)
         if logico and not condicao:
@@ -307,7 +314,6 @@ class Gerador:
             esq, pe = f"ord({esq})", ATOMO
         if getattr(e, "ord_dir", False):
             dir_, pd = f"ord({dir_})", ATOMO
-        # Comparações em Python encadeiam (1 < x < 3); em C não, então isola com parênteses.
         if pe < prec or (prec == CMP and pe == CMP):
             esq = f"({esq})"
         if pd <= prec:

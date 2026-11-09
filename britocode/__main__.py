@@ -1,4 +1,4 @@
-"""Linha de comando:  python -m memepy programa.meme [opções]"""
+"""Linha de comando:  python -m britocode programa.brito [opções]"""
 
 import argparse
 import subprocess
@@ -14,7 +14,6 @@ def ler_arquivo(caminho):
     try:
         return dados.decode("utf-8-sig")
     except UnicodeDecodeError:
-        # Editores antigos no Windows salvam em ANSI (cp1252).
         return dados.decode("cp1252", errors="replace")
 
 
@@ -26,10 +25,10 @@ def main(argv=None):
             pass
 
     ap = argparse.ArgumentParser(
-        prog="python -m memepy",
-        description="Transpilador da linguagem memética (Felipe ... Smith) para Python.",
+        prog="python -m britocode",
+        description="Transpilador BRITOCODE (Felipe ... Smith) para Python.",
     )
-    ap.add_argument("arquivo", help="arquivo com o código memético (ex.: programa.meme)")
+    ap.add_argument("arquivo", help="arquivo .brito (ex.: programa.brito)")
     ap.add_argument("-o", "--saida", help="arquivo .py de saída (padrão: mesmo nome, com .py)")
     ap.add_argument("-r", "--rodar", action="store_true", help="roda o programa depois de transpilar")
     ap.add_argument("-m", "--mostrar", action="store_true", help="mostra o Python gerado em vez de salvar")
@@ -67,7 +66,7 @@ def main(argv=None):
     else:
         saida = Path(args.saida) if args.saida else caminho.with_suffix(".py")
         if saida.resolve() == caminho.resolve():
-            print("O arquivo de saída não pode ser o próprio código memético.", file=sys.stderr)
+            print("O arquivo de saída não pode ser o próprio .brito.", file=sys.stderr)
             return 2
         saida.write_text(codigo, encoding="utf-8")
         print(f"Transpilado: {caminho} -> {saida}", file=sys.stderr)

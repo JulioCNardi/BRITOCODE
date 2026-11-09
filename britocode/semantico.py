@@ -1,31 +1,18 @@
-"""Análise semântica.
-
-Confere o que a gramática sozinha não pega (variável não declarada, Mata_papai
-fora de laço, número errado de argumentos...) e anota a árvore com o que o
-gerador precisa saber:
-
-* ``no.simbolo``    – a variável/função a que um nome se refere;
-* ``no.tipo_expr``  – o tipo de cada expressão ('int', 'float', 'char', 'str',
-                      'entrada', 'bool' ou 'void');
-* nomes em Python sem conflito (C tem escopo de bloco, Python não: uma variável
-  que esconde outra de fora ganha um nome novo, ex.: ``x_2``);
-* quais globais cada função altera (vira ``global x`` no Python);
-* quais VocêÉDeLá (for) podem virar ``for ... in range(...)``.
-"""
+"""Análise semântica: tipos, escopos e anotações para o gerador."""
 
 import keyword
 
 from .arvore import (
-    Atribuicao, Binaria, Chamada, Declaracao, Funcao, Incremento, Leia, LeiaExpr,
-    Numero, Variavel, percorrer,
+    Atribuicao, Binaria, Chamada, Declaracao, Funcao, Incremento,
+    Indexacao, Leia, LeiaExpr, Numero, Variavel, percorrer,
 )
 from .erros import Aviso, ErroSemantico
 
-# Nomes que não podem ser usados como estão no Python gerado.
+# nomes reservados no Python gerado
 RESERVADOS_PY = (
     set(keyword.kwlist)
     | set(keyword.softkwlist)
-    | {"print", "input", "int", "float", "str", "chr", "ord", "bool", "range"}
+    | {"print", "input", "int", "float", "str", "chr", "ord", "bool", "range", "list"}
 )
 
 TEXTOS = ("str", "entrada")
@@ -42,13 +29,18 @@ NOME_TIPO = {
 
 
 class Simbolo:
-    def __init__(self, nome, nome_py, classe, tipo, eh_global, no):
+    def __init__(self, nome, nome_py, classe, tipo, eh_global, no, tamanho=None):
         self.nome = nome
         self.nome_py = nome_py
-        self.classe = classe  # 'variavel', 'parametro' ou 'funcao'
-        self.tipo = tipo  # TipoC (ou None para função sem retorno)
+        self.classe = classe  # variavel | parametro | funcao
+        self.tipo = tipo  # TipoC ou None
         self.eh_global = eh_global
         self.no = no
+        self.tamanho = tamanho  # int se for array 1D; None se escalar
+
+    @property
+    def eh_array(self):
+        return self.tamanho is not None
 
     @property
     def categoria(self):
@@ -64,11 +56,9 @@ class Analisador:
         self.globais_alterados_por_funcoes = set()
         self.ranges_a_confirmar = []
 
-    # ------------------------------------------------------------ entrada
-
     def analisar(self, programa):
         self.escopos = [{}]
-        # 1ª passada: registra todas as funções, para poder chamar antes de declarar.
+        # 1ª passada: registra funções (permite chamar antes de declarar)
         for item in programa.itens:
             if isinstance(item, Funcao):
                 if item.nome in self.escopos[0]:
@@ -79,19 +69,17 @@ class Analisador:
                 sym = Simbolo(item.nome, self._nome_livre(item.nome), "funcao", item.retorno, True, item)
                 self.escopos[0][item.nome] = sym
                 item.simbolo = sym
-        # 2ª passada: analisa tudo na ordem do código.
+        # 2ª passada: analisa na ordem
         for item in programa.itens:
             if isinstance(item, Funcao):
                 self._funcao(item)
             else:
                 self._comando(item)
-        # Só agora sabemos quais globais as funções alteram.
+        # confirma ranges após saber quais globais as funções alteram
         for para, limite in self.ranges_a_confirmar:
             if limite & self.globais_alterados_por_funcoes:
                 para.range = None
         return self.avisos
-
-    # ------------------------------------------------------------ escopos
 
     def _abrir(self):
         self.escopos.append({})
@@ -125,8 +113,7 @@ class Analisador:
                 msg = f"'{nome}' já foi declarada neste bloco (linha {anterior.no.linha})"
             raise ErroSemantico(msg, no.linha, no.coluna)
         if classe == "parametro":
-            # Parâmetro esconde qualquer coisa de fora durante a função inteira, então
-            # pode manter o nome; só não pode bater com outro parâmetro.
+            # parâmetro só precisa não colidir com outro parâmetro
             nome_py = self._nome_livre(nome, {s.nome_py for s in escopo.values()})
         else:
             nome_py = self._nome_livre(nome)
@@ -138,8 +125,6 @@ class Analisador:
     def _aviso(self, mensagem, no):
         self.avisos.append(Aviso(mensagem, no.linha, no.coluna))
 
-    # ------------------------------------------------------------ funções
-
     def _funcao(self, f):
         self.funcao_atual = f
         f.globais = set()
@@ -147,14 +132,12 @@ class Analisador:
         self._abrir()
         for p in f.params:
             p.simbolo = self._declarar(p.nome, "parametro", p.tipo, p)
-        for cmd in f.corpo.comandos:  # o corpo divide o escopo com os parâmetros, como em C
+        for cmd in f.corpo.comandos:  # corpo e parâmetros compartilham o escopo
             self._comando(cmd)
         self._fechar()
         if f.retorno is not None and not f.tem_retorno:
             self._aviso(f"a função '{f.nome}' tem tipo de retorno mas nunca usa Ce_é_mo_playboy", f)
         self.funcao_atual = None
-
-    # ------------------------------------------------------------ comandos
 
     def _comando(self, cmd):
         getattr(self, "_cmd_" + type(cmd).__name__)(cmd)
@@ -171,13 +154,43 @@ class Analisador:
     def _cmd_Declaracao(self, cmd):
         categoria = cmd.tipo.categoria
         for d in cmd.itens:
-            if d.valor is not None:
-                tipo = self._expr(d.valor)
-                self._checar_conversao(tipo, categoria, d.valor, f"guardar isso em '{d.nome}'")
-            d.simbolo = self._declarar(d.nome, "variavel", cmd.tipo, d)
+            if d.tamanho is not None:
+                self._expr(d.tamanho)
+                if not isinstance(d.tamanho, Numero) or d.tamanho.real or d.tamanho.valor < 1:
+                    raise ErroSemantico(
+                        f"tamanho do vetor '{d.nome}' deve ser um inteiro positivo literal",
+                        d.linha, d.coluna,
+                    )
+                n = int(d.tamanho.valor)
+                if d.valor is not None:
+                    raise ErroSemantico(
+                        f"vetor '{d.nome}' usa inicialização com {{ }}; não use = valor escalar",
+                        d.linha, d.coluna,
+                    )
+                if d.init is not None:
+                    if len(d.init) > n:
+                        raise ErroSemantico(
+                            f"vetor '{d.nome}' tem tamanho {n}, mas recebeu {len(d.init)} valores",
+                            d.linha, d.coluna,
+                        )
+                    for e in d.init:
+                        tipo = self._expr(e)
+                        self._checar_conversao(tipo, categoria, e, f"inicializar '{d.nome}'")
+                d.simbolo = self._declarar(d.nome, "variavel", cmd.tipo, d)
+                d.simbolo.tamanho = n
+            else:
+                if d.init is not None:
+                    raise ErroSemantico(
+                        f"'{d.nome}' não é vetor; tire o {{ }} ou declare com tamanho, ex.: Red_bull {d.nome}[3]",
+                        d.linha, d.coluna,
+                    )
+                if d.valor is not None:
+                    tipo = self._expr(d.valor)
+                    self._checar_conversao(tipo, categoria, d.valor, f"guardar isso em '{d.nome}'")
+                d.simbolo = self._declarar(d.nome, "variavel", cmd.tipo, d)
 
-    def _variavel_alvo(self, nome, no):
-        """Busca a variável que vai receber um valor e registra a alteração."""
+    def _variavel_alvo(self, nome, no, precisa_indice=False):
+        """Variável alvo de atribuição; registra alteração de global."""
         sym = self._buscar(nome)
         if sym is None:
             raise ErroSemantico(
@@ -185,34 +198,60 @@ class Analisador:
             )
         if sym.classe == "funcao":
             raise ErroSemantico(f"'{nome}' é uma função, não dá pra guardar valor nela", no.linha, no.coluna)
+        if sym.eh_array and not precisa_indice:
+            raise ErroSemantico(
+                f"'{nome}' é um vetor; use {nome}[i] = ...", no.linha, no.coluna
+            )
+        if not sym.eh_array and precisa_indice:
+            raise ErroSemantico(
+                f"'{nome}' não é vetor; declare com tamanho, ex.: Red_bull {nome}[10]", no.linha, no.coluna
+            )
         if self.funcao_atual is not None and sym.eh_global:
             self.funcao_atual.globais.add(sym.nome_py)
             self.globais_alterados_por_funcoes.add(sym)
         return sym
 
-    def _operacao_sobre(self, sym, op, valor, no):
-        """Monta 'x op valor' para x += valor, x++ etc., e confere os tipos."""
-        var = Variavel(sym.nome, linha=no.linha, coluna=no.coluna)
-        var.simbolo = sym
-        var.tipo_expr = sym.categoria
+    def _checar_indice(self, indice, no):
+        tipo = self._expr(indice)
+        if tipo not in ("int", "bool"):
+            raise ErroSemantico("índice de vetor precisa ser inteiro", no.linha, no.coluna)
+
+    def _operacao_sobre(self, sym, op, valor, no, indice=None):
+        """Monta x op valor (+=, ++, ...) e confere tipos."""
+        if indice is not None:
+            var = Indexacao(sym.nome, indice, linha=no.linha, coluna=no.coluna)
+            var.simbolo = sym
+            var.tipo_expr = sym.categoria
+        else:
+            var = Variavel(sym.nome, linha=no.linha, coluna=no.coluna)
+            var.simbolo = sym
+            var.tipo_expr = sym.categoria
         conta = Binaria(op, var, valor, linha=no.linha, coluna=no.coluna)
         conta.tipo_expr = self._tipar_binaria(conta, sym.categoria, valor.tipo_expr)
         self._checar_conversao(conta.tipo_expr, sym.categoria, conta, f"guardar isso em '{sym.nome}'")
         return conta
 
     def _cmd_Atribuicao(self, cmd):
-        cmd.simbolo = self._variavel_alvo(cmd.alvo, cmd)
+        tem_idx = getattr(cmd, "indice", None) is not None
+        cmd.simbolo = self._variavel_alvo(cmd.alvo, cmd, precisa_indice=tem_idx)
+        if tem_idx:
+            self._checar_indice(cmd.indice, cmd)
         tipo = self._expr(cmd.valor)
         if cmd.op == "=":
             self._checar_conversao(tipo, cmd.simbolo.categoria, cmd.valor, f"guardar isso em '{cmd.alvo}'")
         else:
-            cmd.conta = self._operacao_sobre(cmd.simbolo, cmd.op[0], cmd.valor, cmd)
+            cmd.conta = self._operacao_sobre(cmd.simbolo, cmd.op[0], cmd.valor, cmd, indice=cmd.indice)
 
     def _cmd_Incremento(self, cmd):
-        cmd.simbolo = self._variavel_alvo(cmd.alvo, cmd)
+        tem_idx = getattr(cmd, "indice", None) is not None
+        cmd.simbolo = self._variavel_alvo(cmd.alvo, cmd, precisa_indice=tem_idx)
+        if tem_idx:
+            self._checar_indice(cmd.indice, cmd)
         um = Numero(1, False, linha=cmd.linha, coluna=cmd.coluna)
         um.tipo_expr = "int"
-        cmd.conta = self._operacao_sobre(cmd.simbolo, "+" if cmd.op == "++" else "-", um, cmd)
+        cmd.conta = self._operacao_sobre(
+            cmd.simbolo, "+" if cmd.op == "++" else "-", um, cmd, indice=cmd.indice
+        )
 
     def _condicao(self, expr):
         self._expr(expr)
@@ -230,7 +269,7 @@ class Analisador:
         self.lacos -= 1
 
     def _cmd_Para(self, cmd):
-        self._abrir()  # a variável declarada no VocêÉDeLá só existe dentro dele
+        self._abrir()  # variável do for só existe dentro dele
         if cmd.inicio is not None:
             self._comando(cmd.inicio)
         if cmd.condicao is not None:
@@ -287,8 +326,6 @@ class Analisador:
     def _cmd_ComandoChamada(self, cmd):
         self._expr(cmd.chamada, pode_ser_void=True)
 
-    # ------------------------------------------------------------ expressões
-
     def _expr(self, e, pode_ser_void=False):
         e.tipo_expr = getattr(self, "_expr_" + type(e).__name__)(e)
         if e.tipo_expr == "void" and not pode_ser_void:
@@ -321,6 +358,26 @@ class Analisador:
             raise ErroSemantico(
                 f"'{e.nome}' é uma função; pra chamar use Tô_No_SAMU {e.nome}(...)", e.linha, e.coluna
             )
+        if sym.eh_array:
+            raise ErroSemantico(
+                f"'{e.nome}' é um vetor; use {e.nome}[i] para ler um elemento", e.linha, e.coluna
+            )
+        e.simbolo = sym
+        return sym.categoria
+
+    def _expr_Indexacao(self, e):
+        sym = self._buscar(e.nome)
+        if sym is None:
+            raise ErroSemantico(
+                f"a variável '{e.nome}' não foi declarada (declare antes, ex.: Red_bull {e.nome}[10];)",
+                e.linha, e.coluna,
+            )
+        if not sym.eh_array:
+            raise ErroSemantico(
+                f"'{e.nome}' não é vetor; declare com tamanho, ex.: Red_bull {e.nome}[10]",
+                e.linha, e.coluna,
+            )
+        self._checar_indice(e.indice, e)
         e.simbolo = sym
         return sym.categoria
 
@@ -355,7 +412,7 @@ class Analisador:
             return "bool"
         if tipo in TEXTOS:
             raise ErroSemantico(f"não dá pra usar '{e.op}' em texto", e.linha, e.coluna)
-        e.ord = tipo == "char"  # em C, char em conta vira número
+        e.ord = tipo == "char"  # char em conta vira número
         return "int" if tipo in ("char", "bool") else tipo
 
     def _expr_Binaria(self, e):
@@ -373,7 +430,7 @@ class Analisador:
                     "não dá pra somar texto com número; no vo_fica_pelado_aqui separe com vírgula",
                     e.linha, e.coluna,
                 )
-            return "str"  # concatenação
+            return "str"
         if op in ("==", "!=", "<", "<=", ">", ">="):
             if (texto_e or te == "char") and (texto_d or td == "char"):
                 return "bool"
@@ -384,7 +441,6 @@ class Analisador:
                 )
             e.ord_esq, e.ord_dir = te == "char", td == "char"
             return "bool"
-        # contas: + - * / %
         if texto_e or texto_d:
             raise ErroSemantico(f"não dá pra usar '{op}' com texto", e.linha, e.coluna)
         e.ord_esq, e.ord_dir = te == "char", td == "char"
@@ -392,7 +448,7 @@ class Analisador:
         num_d = "int" if td in ("char", "bool") else td
         resultado = "float" if "float" in (num_e, num_d) else "int"
         if op == "/" and resultado == "int":
-            e.div_inteira = True  # em C, 7 / 2 == 3
+            e.div_inteira = True  # 7 / 2 == 3
         if op in ("/", "%") and isinstance(e.dir, Numero) and e.dir.valor == 0:
             self._aviso("divisão por zero", e)
         return resultado
@@ -403,15 +459,8 @@ class Analisador:
                 f"não dá pra {contexto}: é texto, mas o tipo é {NOME_TIPO[destino]}", no.linha, no.coluna
             )
 
-    # ------------------------------------------------------------ for -> range
-
     def _avaliar_range(self, cmd):
-        """Decide se o VocêÉDeLá pode virar ``for i in range(...)``.
-
-        Só vale para o formato clássico (Red_bull i = a; i < b; i++), quando
-        nada dentro do laço mexe em i nem no limite. Se não der, o gerador usa
-        a tradução geral com while, que funciona sempre.
-        """
+        """VocêÉDeLá clássico (i = a; i < b; i++) -> for/range; senão while."""
         ini, cond = cmd.inicio, cmd.condicao
         if not (isinstance(ini, Declaracao) and len(ini.itens) == 1):
             return None
@@ -445,7 +494,7 @@ class Analisador:
         if var in alterados or limite & alterados:
             return None
         if tem_chamada and any(s.eh_global for s in limite):
-            # Uma função chamada no laço pode alterar o limite; confere no fim.
+            # função no laço pode alterar o limite
             self.ranges_a_confirmar.append((cmd, limite))
         return {
             "var": var,

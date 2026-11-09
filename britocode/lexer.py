@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .erros import ErroLexico
 
-# Palavra memética -> categoria do token
+# palavra-chave -> token
 PALAVRAS_CHAVE = {
     "Felipe": "INICIO",
     "Smith": "FIM",
@@ -24,7 +24,7 @@ PALAVRAS_CHAVE = {
     "vo_fica_pelado_aqui": "PRINT",
 }
 
-# Palavra memética -> tipo de C que ela representa (token "TIPO")
+# palavra-chave -> tipo C
 TIPOS = {
     "Jarbas": "FLOAT",
     "Red_bull": "INT",
@@ -35,7 +35,7 @@ TIPOS = {
     "Caralho": "LONG",
 }
 
-# Caminho inverso, usado nas mensagens de erro
+# inverso, para mensagens de erro
 NOME_DO_TOKEN = {v: k for k, v in PALAVRAS_CHAVE.items()}
 NOME_DO_TIPO = {v: k for k, v in TIPOS.items()}
 
@@ -45,18 +45,18 @@ def sem_acento(texto):
     return "".join(c for c in decomposto if not unicodedata.combining(c))
 
 
-# As palavras-chave são reconhecidas com ou sem acento (Tô_No_SAMU ou To_No_SAMU).
+# busca ignora acentos (Tô_No_SAMU == To_No_SAMU)
 _BUSCA_CHAVE = {sem_acento(k.rstrip("?")): v for k, v in PALAVRAS_CHAVE.items()}
 _BUSCA_TIPO = {sem_acento(k): v for k, v in TIPOS.items()}
 
 OPERADORES_DUPLOS = ("==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%=")
-OPERADORES_SIMPLES = "+-*/%=<>!(){},;"
+OPERADORES_SIMPLES = "+-*/%=<>!(){}[],;"
 DIGITOS = "0123456789"
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
 
 
 def preparar_fonte(texto):
-    """Remove BOM, padroniza quebras de linha e acentos (é composto vs. e + ´)."""
+    """Remove BOM e padroniza quebras de linha/acentos."""
     if texto.startswith("﻿"):
         texto = texto[1:]
     texto = texto.replace("\r\n", "\n").replace("\r", "\n")
@@ -65,9 +65,9 @@ def preparar_fonte(texto):
 
 @dataclass
 class Token:
-    tipo: str  # categoria: ID, NUM_INT, NUM_REAL, CHAR, TEXTO, TIPO, palavra-chave, operador ou EOF
-    valor: object  # valor já interpretado (número, texto sem aspas, nome do tipo...)
-    texto: str  # como apareceu no código
+    tipo: str
+    valor: object
+    texto: str
     linha: int
     coluna: int
 
@@ -202,7 +202,7 @@ class Lexer:
 
     def _escape(self):
         linha, coluna = self.linha, self.coluna
-        self._avancar()  # a barra
+        self._avancar()
         c = self._atual()
         if c in ("", "\n"):
             raise ErroLexico("barra invertida no fim do texto", linha, coluna)
@@ -213,7 +213,7 @@ class Lexer:
 
     def _texto(self, linha, coluna):
         inicio = self.pos
-        self._avancar()  # aspas de abertura
+        self._avancar()
         partes = []
         while True:
             c = self._atual()
@@ -231,7 +231,7 @@ class Lexer:
 
     def _caractere(self, linha, coluna):
         inicio = self.pos
-        self._avancar()  # aspas simples de abertura
+        self._avancar()
         c = self._atual()
         if c == "'":
             raise ErroLexico("caractere vazio ''", linha, coluna)
