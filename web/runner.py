@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,73 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from britocode import ErroMeme, transpilar
+
+_LEIA_INI = re.compile(r"Eu_Tenho_Quantos_Anos_Gente\?\s*\(")
+_STR_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+_ID_RE = re.compile(r"[A-Za-z_À-ÿ][\wÀ-ÿ]*")
+
+
+def _args_leia(fonte: str, inicio: int) -> str | None:
+    """Conteúdo entre parênteses de um Eu_Tenho_Quantos_Anos_Gente?, respeitando strings."""
+    i = inicio
+    n = len(fonte)
+    profundidade = 1
+    while i < n and profundidade:
+        c = fonte[i]
+        if c == '"':
+            m = _STR_RE.match(fonte, i)
+            if not m:
+                return None
+            i = m.end()
+            continue
+        if c == "(":
+            profundidade += 1
+        elif c == ")":
+            profundidade -= 1
+            if profundidade == 0:
+                return fonte[inicio:i]
+        i += 1
+    return None
+
+
+def _desescapar(texto: str) -> str:
+    return (
+        texto.replace("\\\\", "\0")
+        .replace('\\"', '"')
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\0", "\\")
+    )
+
+
+def pedidos_entrada(fonte: str) -> list[str]:
+    """Rótulos das linhas de stdin, na ordem dos Eu_Tenho_Quantos_Anos_Gente?."""
+    pedidos: list[str] = []
+    for m in _LEIA_INI.finditer(fonte):
+        args = _args_leia(fonte, m.end())
+        if args is None:
+            continue
+        args = args.strip()
+        if not args:
+            pedidos.append("valor")
+            continue
+        strings = _STR_RE.findall(args)
+        prompt = None
+        resto = args
+        if strings:
+            prompt = _desescapar(strings[0][1:-1])
+            for s in strings:
+                resto = resto.replace(s, "", 1)
+        ids = _ID_RE.findall(resto)
+        if ids:
+            for i, nome in enumerate(ids):
+                if i == 0 and prompt is not None:
+                    pedidos.append(prompt.rstrip() or nome)
+                else:
+                    pedidos.append(nome)
+        else:
+            pedidos.append((prompt or "valor").rstrip())
+    return pedidos
 
 
 @dataclass
@@ -18,6 +86,33 @@ class ResultadoExecucao:
     saida: str
     erro: str
     codigo_retorno: int | None
+
+
+@dataclass
+class Diagnostico:
+    severidade: str
+    etapa: str
+    mensagem: str
+    linha: int | None
+    coluna: int | None
+    detalhe: str
+
+
+def _diagnostico(e: ErroMeme, severidade: str, fonte: str, nome: str) -> Diagnostico:
+    return Diagnostico(
+        severidade, e.etapa, e.mensagem, e.linha, e.coluna, e.formatar(fonte, nome)
+    )
+
+
+def diagnosticar(fonte: str, nome: str = "programa.brito") -> list[Diagnostico]:
+    """Erros e avisos da linguagem, sem executar o programa."""
+    if not fonte.strip():
+        return []
+    try:
+        _, avisos = transpilar(fonte, nome)
+    except ErroMeme as e:
+        return [_diagnostico(e, "erro", fonte, nome)]
+    return [_diagnostico(a, "aviso", fonte, nome) for a in avisos]
 
 
 def transpilar_fonte(fonte: str, nome: str = "programa.brito") -> tuple[str, list[str]]:
